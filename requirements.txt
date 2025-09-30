@@ -1,0 +1,12 @@
+assemblyai
+openai
+elevenlabs==0.3.0b0
+pydub
+scipy
+numpy
+httpx
+fastapi
+uvicorn
+python-dotenv
+soundfile
+python-multipart
