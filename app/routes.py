@@ -18,14 +18,11 @@ router = APIRouter()
 _semaphore = asyncio.Semaphore(settings.max_concurrent_requests)
 
 _TEMPLATES_DIR = Path(__file__).resolve().parent.parent / "templates"
-_INDEX_FALLBACK = Path(__file__).resolve().parent.parent / "index.html"
 
 
 @router.get("/", response_class=HTMLResponse)
 async def serve_index():
     index_path = _TEMPLATES_DIR / "index.html"
-    if not index_path.exists():
-        index_path = _INDEX_FALLBACK
     return HTMLResponse(content=index_path.read_text(encoding="utf-8"))
 
 
