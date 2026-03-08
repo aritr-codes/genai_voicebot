@@ -6,7 +6,7 @@ requires-python = ">=3.11"
 dependencies = [
     "assemblyai>=0.35.0",
     "openai>=1.50.0",
-    "elevenlabs==0.3.0b0",
+    "elevenlabs>=1.0.0",
     "pydub>=0.25.1",
     "scipy>=1.14.0",
     "numpy>=1.26.0",

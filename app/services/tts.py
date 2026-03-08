@@ -20,14 +20,13 @@ def generate_tts_audio_bytes(text: str, voice: str | None = None, speed: float =
         raise ConfigurationError("elevenlabs package is not installed")
 
     try:
-        result = el_mod.generate(api_key=api_key, text=text, voice=voice, stream=False)
-
-        if hasattr(result, "read"):
-            mp3_bytes = result.read()
-        elif isinstance(result, (bytes, bytearray)):
-            mp3_bytes = bytes(result)
-        else:
-            mp3_bytes = bytes(result)
+        client = el_mod.ElevenLabs(api_key=api_key)
+        result = client.text_to_speech.convert(
+            voice_id=voice,
+            text=text,
+            model_id="eleven_multilingual_v2",
+        )
+        mp3_bytes = b"".join(result)
 
         if not mp3_bytes or len(mp3_bytes) < 100:
             raise TTSError("TTS returned empty or invalid audio")

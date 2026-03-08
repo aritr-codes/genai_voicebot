@@ -13,10 +13,6 @@ A voice-based AI interview practice application. Users speak into their browser,
 - **Concurrency Control** — Semaphore-based request limiting (default: 3 concurrent)
 - **Request Tracing** — Unique request IDs in all log entries for debugging
 
-## Demo
-
-[Watch Demo Video](./demo.mp4)
-
 ## Architecture
 
 ### Process Flow
