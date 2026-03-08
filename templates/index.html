@@ -1,0 +1,88 @@
+<!DOCTYPE html>
+<html lang="en">
+
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>AI Interview Assistant</title>
+    <link rel="stylesheet" href="/static/css/styles.css">
+</head>
+
+<body>
+    <div class="container">
+        <div class="header">
+            <div class="title">🎤 AI Interview Assistant</div>
+            <div class="subtitle">Practice interviews with AI</div>
+        </div>
+
+        <div class="panel recording-panel" id="recording-panel">
+            <h3><span class="emoji">🎙️</span>Record Your Question</h3>
+            <div class="audio-container">
+                <button id="record-btn" class="primary-btn">
+                    <span class="emoji">🎙️</span> Start Recording
+                </button>
+                <button id="stop-btn" class="primary-btn" style="display:none;">
+                    <span class="emoji">⏹️</span> Stop Recording
+                </button>
+                <p id="recording-status" style="margin-top:12px; font-weight: 500;"></p>
+
+                <!-- Audio Visualizer -->
+                <div class="visualizer-container" id="visualizer-container">
+                    <canvas id="visualizer"></canvas>
+                </div>
+
+                <!-- Waveform for playback -->
+                <div class="waveform" id="waveform">
+                    <canvas id="waveform-canvas"></canvas>
+                </div>
+
+                <audio id="preview-audio" controls style="margin-top:12px;display:none;"></audio>
+
+                <!-- Progress bar for recording -->
+                <div class="progress-bar" id="recording-progress">
+                    <div class="progress-fill" id="progress-fill"></div>
+                </div>
+            </div>
+            <p style="font-size:14px;color:var(--text-secondary);margin:12px 0 0;text-align:center;">
+                Speak clearly and at normal pace. Maximum 30 seconds.
+            </p>
+        </div>
+
+        <div class="button-group">
+            <button id="generate-btn" class="primary-btn" disabled>
+                <span class="emoji">🚀</span> Generate AI Response
+            </button>
+            <button id="clear-btn" class="secondary-btn">
+                <span class="emoji">🗑️</span> Clear All
+            </button>
+        </div>
+
+        <div id="status" class="status">Ready to process your question</div>
+
+        <div id="response-panel" class="panel">
+            <h3><span class="emoji">🤖</span>AI Response</h3>
+            <audio id="ai-audio" controls autoplay></audio>
+
+            <div class="form-group">
+                <label>AI Response Text</label>
+                <textarea id="ai-text" readonly></textarea>
+            </div>
+
+            <div class="form-group">
+                <label>Your Question (Transcribed)</label>
+                <textarea id="transcript" readonly></textarea>
+            </div>
+        </div>
+
+        <div class="tips">
+            <p><strong>💡 Tips for best results:</strong></p>
+            <p>• Speak clearly and at normal pace • Keep questions under 30 seconds • Wait for processing to complete
+            </p>
+            <p><strong>🔧 Powered by:</strong> OpenAI • AssemblyAI • ElevenLabs</p>
+        </div>
+    </div>
+
+    <script type="module" src="/static/js/app.js"></script>
+</body>
+
+</html>
