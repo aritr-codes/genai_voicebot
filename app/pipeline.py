@@ -6,9 +6,10 @@ from app.cache import memory_cache
 from app.config import settings
 from app.exceptions import AudioError
 from app.monitoring import PerformanceMetrics, perf_monitor
-from app.services.llm import generate_llm_response
+from app.services.llm import generate_llm_response, generate_llm_response_with_history
 from app.services.transcription import transcribe_audio_bytes
 from app.services.tts import generate_tts_audio_bytes
+from app.prompts import build_interview_prompt, build_opening_instruction
 
 logger = logging.getLogger(__name__)
 
@@ -81,3 +82,47 @@ def process_audio_pipeline(
     logger.info("Pipeline completed in %.0fms", metrics.total_time * 1000)
 
     return transcript, tts_wav_bytes, ai_text
+
+
+def process_turn_pipeline(
+    session: "InterviewSession",
+    wav_bytes: bytes,
+) -> tuple[str, bytes, str]:
+    """Process one answer turn within a multi-turn interview session.
+
+    Returns (transcript, tts_wav_bytes, ai_response_text).
+    LLM response is NOT cached (context changes each turn).
+    TTS response IS cached (same text = same audio).
+    """
+    from app.session import InterviewSession  # local import to avoid circular
+
+    # 1. Validate audio
+    validate_wav_bytes(wav_bytes)
+
+    # 2. Transcribe
+    transcript = transcribe_audio_bytes(wav_bytes)
+    logger.info("Turn transcript: %s…", transcript[:80])
+
+    # 3. Append user message to session history
+    session.conversation_history.append({"role": "user", "content": transcript})
+
+    # 4. Build dynamic system prompt and generate response (no cache)
+    system_prompt = build_interview_prompt(
+        difficulty=session.difficulty,
+        topic=session.topic,
+        resume_text=session.resume_text,
+    )
+    ai_text = generate_llm_response_with_history(
+        system_prompt=system_prompt,
+        conversation_history=session.conversation_history[:-1],  # exclude current user msg (already in messages)
+        user_text=transcript,
+    )
+    logger.info("Turn AI response: %s…", ai_text[:80])
+
+    # 5. Append assistant response to session history
+    session.conversation_history.append({"role": "assistant", "content": ai_text})
+
+    # 6. TTS (cached — same text always gives same audio)
+    tts_bytes = generate_tts_audio_bytes(ai_text)
+
+    return transcript, tts_bytes, ai_text

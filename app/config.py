@@ -47,6 +47,12 @@ class Settings(BaseSettings):
     # Paths
     system_prompt_path: Path = PROJECT_ROOT / "prompts" / "interview_system.txt"
 
+    # Session
+    session_ttl_hours: int = 2
+    max_session_duration_minutes: int = 60
+    evaluation_prompt_path: Path = PROJECT_ROOT / "prompts" / "evaluation_system.txt"
+    evaluation_max_tokens: int = 1500
+
     model_config = {
         "env_file": str(PROJECT_ROOT / ".env"),
         "env_file_encoding": "utf-8",

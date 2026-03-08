@@ -3,13 +3,19 @@ import base64
 import logging
 from pathlib import Path
 
-from fastapi import APIRouter, UploadFile, File, HTTPException
+from fastapi import APIRouter, UploadFile, File, HTTPException, Form
 from fastapi.responses import HTMLResponse
 
+from pydantic import BaseModel
 from app.config import settings
 from app.exceptions import VoicebotError, AudioError, ConfigurationError
 from app.monitoring import perf_monitor
 from app.pipeline import process_audio_pipeline
+from app.session import session_store
+from app.prompts import build_interview_prompt, build_opening_instruction
+from app.services.llm import generate_llm_response_with_history
+from app.services.tts import generate_tts_audio_bytes
+from app.pipeline import process_turn_pipeline
 
 logger = logging.getLogger(__name__)
 
@@ -65,3 +71,162 @@ async def process_audio_endpoint(audio: UploadFile = File(...)):
         "ai_response": ai_text,
         "audio_base64": audio_base64,
     }
+
+
+class StartSessionRequest(BaseModel):
+    resume_text: str | None = None
+    difficulty: str = "intermediate"
+    duration_minutes: int = 30
+    topic: str = "general"
+
+
+class EndSessionRequest(BaseModel):
+    session_id: str
+
+
+@router.post("/start_session")
+async def start_session_endpoint(req: StartSessionRequest):
+    if not settings.is_configured():
+        raise HTTPException(status_code=503, detail="API keys not configured")
+
+    session = session_store.create(
+        resume_text=req.resume_text,
+        difficulty=req.difficulty,
+        duration_minutes=req.duration_minutes,
+        topic=req.topic,
+    )
+
+    system_prompt = build_interview_prompt(
+        difficulty=session.difficulty,
+        topic=session.topic,
+        resume_text=session.resume_text,
+    )
+    opening = build_opening_instruction(session.difficulty, session.topic)
+
+    async with _semaphore:
+        try:
+            first_question = await asyncio.to_thread(
+                generate_llm_response_with_history,
+                system_prompt,
+                [],
+                opening,
+            )
+        except VoicebotError as e:
+            raise HTTPException(status_code=502, detail=e.user_message)
+        except Exception as e:
+            logger.error("start_session LLM error: %s", e, exc_info=True)
+            raise HTTPException(status_code=500, detail=str(e))
+
+    session.conversation_history.append({"role": "assistant", "content": first_question})
+
+    try:
+        tts_bytes = await asyncio.to_thread(generate_tts_audio_bytes, first_question)
+        audio_base64 = base64.b64encode(tts_bytes).decode()
+    except Exception:
+        audio_base64 = None  # TTS failure is non-fatal; frontend shows text
+
+    return {
+        "session_id": session.session_id,
+        "question_text": first_question,
+        "question_audio_base64": audio_base64,
+    }
+
+
+@router.post("/process_turn")
+async def process_turn_endpoint(
+    session_id: str = Form(...),
+    audio: UploadFile = File(...),
+):
+    session = session_store.get(session_id)
+    if not session or not session.is_active:
+        raise HTTPException(status_code=404, detail="Session not found or already ended")
+
+    wav_bytes = await audio.read()
+    if not wav_bytes:
+        raise HTTPException(status_code=400, detail="No audio data provided")
+
+    async with _semaphore:
+        try:
+            transcript, tts_bytes, ai_text = await asyncio.to_thread(
+                process_turn_pipeline, session, wav_bytes
+            )
+        except AudioError as e:
+            raise HTTPException(status_code=400, detail=e.user_message)
+        except ConfigurationError as e:
+            raise HTTPException(status_code=503, detail=e.user_message)
+        except VoicebotError as e:
+            raise HTTPException(status_code=502, detail=e.user_message)
+        except Exception as e:
+            logger.error("process_turn error: %s", e, exc_info=True)
+            raise HTTPException(status_code=500, detail=str(e))
+
+    return {
+        "transcript": transcript,
+        "ai_response": ai_text,
+        "audio_base64": base64.b64encode(tts_bytes).decode(),
+        "question_number": len([m for m in session.conversation_history if m["role"] == "user"]),
+    }
+
+
+@router.post("/end_session")
+async def end_session_endpoint(req: EndSessionRequest):
+    session = session_store.get(req.session_id)
+    if not session:
+        raise HTTPException(status_code=404, detail="Session not found")
+
+    session_store.close(req.session_id)
+
+    if not session.conversation_history:
+        return {
+            "overall_score": 0,
+            "summary": "No answers were recorded.",
+            "strengths": [],
+            "weaknesses": [],
+            "suggestions": ["Complete at least one question to receive feedback."],
+            "per_question": [],
+        }
+
+    # Build transcript for evaluation
+    transcript_lines = []
+    for msg in session.conversation_history:
+        role_label = "Interviewer" if msg["role"] == "assistant" else "Candidate"
+        transcript_lines.append(f"{role_label}: {msg['content']}")
+    full_transcript = "\n\n".join(transcript_lines)
+
+    # Load evaluation system prompt from file
+    eval_prompt_path = settings.evaluation_prompt_path
+    if eval_prompt_path.exists():
+        evaluation_system = eval_prompt_path.read_text(encoding="utf-8")
+    else:
+        evaluation_system = "You are an expert interview coach. Always respond with valid JSON only."
+
+    evaluation_request = f"Here is the full interview transcript to evaluate:\n\n{full_transcript}"
+
+    async with _semaphore:
+        try:
+            raw = await asyncio.to_thread(
+                generate_llm_response_with_history,
+                evaluation_system,
+                [],
+                evaluation_request,
+            )
+        except Exception as e:
+            logger.error("end_session evaluation error: %s", e, exc_info=True)
+            raise HTTPException(status_code=502, detail="Could not generate evaluation")
+
+    import json
+    try:
+        # Strip markdown fences if present
+        cleaned = raw.strip().removeprefix("```json").removeprefix("```").removesuffix("```").strip()
+        evaluation = json.loads(cleaned)
+    except Exception:
+        evaluation = {
+            "overall_score": 5.0,
+            "summary": "Evaluation could not be parsed. Here is the raw feedback.",
+            "strengths": [raw[:500]] if raw else [],
+            "weaknesses": [],
+            "suggestions": [],
+            "per_question": [],
+        }
+
+    return evaluation

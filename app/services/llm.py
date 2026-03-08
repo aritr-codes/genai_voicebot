@@ -93,3 +93,47 @@ def _generate_via_http(messages: list[dict]) -> str:
     except Exception as e:
         logger.error("HTTP LLM fallback failed: %s", e)
         raise LLMError(f"Failed to generate response: {e}", detail=str(e))
+
+
+def generate_llm_response_with_history(
+    system_prompt: str,
+    conversation_history: list[dict],
+    user_text: str,
+) -> str:
+    """Multi-turn variant: passes full conversation history to the LLM.
+
+    If history exceeds ~3000 tokens (estimated), the oldest turns are dropped
+    to stay within context limits (sliding window).
+    """
+    api_key = settings.openai_api_key.get_secret_value()
+    if not api_key:
+        raise ConfigurationError("OpenAI API key not configured")
+
+    # Rough token estimate: 1 token ≈ 4 chars
+    MAX_HISTORY_CHARS = 12000
+    trimmed_history = list(conversation_history)
+    while trimmed_history:
+        total_chars = sum(len(m.get("content", "")) for m in trimmed_history)
+        if total_chars <= MAX_HISTORY_CHARS:
+            break
+        trimmed_history.pop(0)  # drop oldest turn
+
+    messages = [{"role": "system", "content": system_prompt}]
+    messages.extend(trimmed_history)
+    messages.append({"role": "user", "content": user_text})
+
+    client = _get_openai_client()
+    try:
+        response = client.chat.completions.create(
+            model=settings.openai_model,
+            messages=messages,
+            max_tokens=settings.llm_max_tokens,
+            temperature=settings.llm_temperature,
+            presence_penalty=settings.llm_presence_penalty,
+            frequency_penalty=settings.llm_frequency_penalty,
+            timeout=settings.request_timeout_seconds,
+        )
+        return response.choices[0].message.content.strip()
+    except Exception as e:
+        logger.error("OpenAI multi-turn call failed: %s", e)
+        raise LLMError("Failed to generate AI response", str(e))

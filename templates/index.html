@@ -6,80 +6,243 @@
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>AI Interview Assistant</title>
     <link rel="stylesheet" href="/static/css/styles.css">
+    <!-- pdf.js for client-side PDF text extraction -->
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.min.js"></script>
 </head>
 
 <body>
     <div class="container">
         <div class="header">
             <div class="title">🎤 AI Interview Assistant</div>
-            <div class="subtitle">Practice interviews with AI</div>
+            <div class="subtitle" id="header-subtitle">Set up your practice interview</div>
         </div>
 
-        <div class="panel recording-panel" id="recording-panel">
-            <h3><span class="emoji">🎙️</span>Record Your Question</h3>
-            <div class="audio-container">
-                <button id="record-btn" class="primary-btn">
-                    <span class="emoji">🎙️</span> Start Recording
+        <!-- ===== SCREEN 1: SETUP ===== -->
+        <section id="screen-setup" class="screen screen--active">
+
+            <!-- Resume Upload -->
+            <div class="panel setup-panel">
+                <h3><span class="emoji">📄</span>Resume (Optional)</h3>
+                <div class="drop-zone" id="drop-zone">
+                    <input type="file" id="resume-input" accept=".pdf,.txt" hidden>
+                    <div class="drop-zone__prompt" id="drop-prompt">
+                        <span class="drop-zone__icon">📁</span>
+                        <p>Drag & drop your resume here, or <button type="button" class="link-btn" id="browse-btn">browse</button></p>
+                        <p class="drop-zone__hint">PDF or TXT, max 2 MB</p>
+                    </div>
+                    <div class="drop-zone__info" id="drop-info" style="display:none;">
+                        <span class="drop-zone__filename" id="resume-filename"></span>
+                        <button type="button" class="icon-btn" id="remove-resume-btn" title="Remove resume">✕</button>
+                    </div>
+                </div>
+            </div>
+
+            <!-- Configuration -->
+            <div class="panel setup-panel">
+                <h3><span class="emoji">⚙️</span>Interview Settings</h3>
+
+                <!-- Difficulty -->
+                <div class="setting-group">
+                    <label class="setting-label">Difficulty</label>
+                    <div class="segmented-control" id="difficulty-control">
+                        <button type="button" class="seg-btn" data-value="beginner">
+                            <span class="seg-title">Beginner</span>
+                            <span class="seg-desc">Foundational concepts</span>
+                        </button>
+                        <button type="button" class="seg-btn seg-btn--active" data-value="intermediate">
+                            <span class="seg-title">Intermediate</span>
+                            <span class="seg-desc">Problem-solving</span>
+                        </button>
+                        <button type="button" class="seg-btn" data-value="advanced">
+                            <span class="seg-title">Advanced</span>
+                            <span class="seg-desc">System design & depth</span>
+                        </button>
+                    </div>
+                </div>
+
+                <!-- Duration -->
+                <div class="setting-group">
+                    <label class="setting-label">Duration</label>
+                    <div class="btn-group" id="duration-control">
+                        <button type="button" class="pill-btn" data-value="15">15 min</button>
+                        <button type="button" class="pill-btn pill-btn--active" data-value="30">30 min</button>
+                        <button type="button" class="pill-btn" data-value="45">45 min</button>
+                    </div>
+                </div>
+
+                <!-- Topic -->
+                <div class="setting-group">
+                    <label class="setting-label">Topic / Role</label>
+                    <select id="topic-select" class="select-input">
+                        <option value="general">General</option>
+                        <option value="machine_learning">Machine Learning</option>
+                        <option value="data_engineering">Data Engineering</option>
+                        <option value="backend_development">Backend Development</option>
+                        <option value="system_design">System Design</option>
+                    </select>
+                </div>
+            </div>
+
+            <!-- Start Button -->
+            <div class="button-group">
+                <button id="start-interview-btn" class="primary-btn primary-btn--large">
+                    <span class="emoji">🚀</span> Start Interview
                 </button>
-                <button id="stop-btn" class="primary-btn" style="display:none;">
-                    <span class="emoji">⏹️</span> Stop Recording
+            </div>
+
+            <div class="tips">
+                <p><strong>💡 How it works:</strong></p>
+                <p>The AI will ask you interview questions based on your settings. Answer by speaking into your microphone. At the end, you'll receive detailed feedback on your performance.</p>
+                <p><strong>🔧 Powered by:</strong> OpenAI • AssemblyAI • ElevenLabs</p>
+            </div>
+        </section>
+
+        <!-- ===== SCREEN 2: INTERVIEW ===== -->
+        <section id="screen-interview" class="screen">
+
+            <!-- Top Bar -->
+            <div class="interview-topbar">
+                <div class="topbar-left">
+                    <span class="question-badge" id="question-badge">Q 1 / ~10</span>
+                </div>
+                <div class="topbar-center">
+                    <div class="timer-display" id="timer-display">30:00</div>
+                </div>
+                <div class="topbar-right">
+                    <button id="end-interview-btn" class="secondary-btn secondary-btn--sm">
+                        End Interview
+                    </button>
+                </div>
+            </div>
+
+            <!-- AI Question -->
+            <div class="panel question-panel">
+                <h3><span class="emoji">🤖</span>Interviewer</h3>
+                <p class="question-text" id="question-text">Tell me about yourself and your experience.</p>
+                <audio id="question-audio" controls style="display:none;"></audio>
+            </div>
+
+            <!-- Recording Panel (reused structure) -->
+            <div class="panel recording-panel" id="recording-panel">
+                <h3><span class="emoji">🎙️</span>Your Answer</h3>
+                <div class="audio-container">
+                    <button id="record-btn" class="primary-btn">
+                        <span class="emoji">🎙️</span> Start Recording
+                    </button>
+                    <button id="stop-btn" class="primary-btn" style="display:none;">
+                        <span class="emoji">⏹️</span> Stop Recording
+                    </button>
+                    <p id="recording-status" style="margin-top:12px; font-weight: 500;"></p>
+
+                    <!-- Audio Visualizer -->
+                    <div class="visualizer-container" id="visualizer-container">
+                        <canvas id="visualizer"></canvas>
+                    </div>
+
+                    <!-- Waveform for playback -->
+                    <div class="waveform" id="waveform">
+                        <canvas id="waveform-canvas"></canvas>
+                    </div>
+
+                    <audio id="preview-audio" controls style="margin-top:12px;display:none;"></audio>
+
+                    <!-- Progress bar for recording -->
+                    <div class="progress-bar" id="recording-progress">
+                        <div class="progress-fill" id="progress-fill"></div>
+                    </div>
+                </div>
+                <p style="font-size:14px;color:var(--text-secondary);margin:12px 0 0;text-align:center;">
+                    Speak clearly and at normal pace. Maximum 30 seconds per answer.
+                </p>
+            </div>
+
+            <!-- Interview Action Buttons -->
+            <div class="button-group">
+                <button id="submit-answer-btn" class="primary-btn" disabled>
+                    <span class="emoji">📤</span> Submit Answer
                 </button>
-                <p id="recording-status" style="margin-top:12px; font-weight: 500;"></p>
-
-                <!-- Audio Visualizer -->
-                <div class="visualizer-container" id="visualizer-container">
-                    <canvas id="visualizer"></canvas>
-                </div>
-
-                <!-- Waveform for playback -->
-                <div class="waveform" id="waveform">
-                    <canvas id="waveform-canvas"></canvas>
-                </div>
-
-                <audio id="preview-audio" controls style="margin-top:12px;display:none;"></audio>
-
-                <!-- Progress bar for recording -->
-                <div class="progress-bar" id="recording-progress">
-                    <div class="progress-fill" id="progress-fill"></div>
-                </div>
-            </div>
-            <p style="font-size:14px;color:var(--text-secondary);margin:12px 0 0;text-align:center;">
-                Speak clearly and at normal pace. Maximum 30 seconds.
-            </p>
-        </div>
-
-        <div class="button-group">
-            <button id="generate-btn" class="primary-btn" disabled>
-                <span class="emoji">🚀</span> Generate AI Response
-            </button>
-            <button id="clear-btn" class="secondary-btn">
-                <span class="emoji">🗑️</span> Clear All
-            </button>
-        </div>
-
-        <div id="status" class="status">Ready to process your question</div>
-
-        <div id="response-panel" class="panel">
-            <h3><span class="emoji">🤖</span>AI Response</h3>
-            <audio id="ai-audio" controls autoplay></audio>
-
-            <div class="form-group">
-                <label>AI Response Text</label>
-                <textarea id="ai-text" readonly></textarea>
+                <button id="next-question-btn" class="primary-btn" style="display:none;">
+                    <span class="emoji">➡️</span> Next Question
+                </button>
+                <button id="skip-question-btn" class="secondary-btn">
+                    <span class="emoji">⏭️</span> Skip
+                </button>
             </div>
 
-            <div class="form-group">
-                <label>Your Question (Transcribed)</label>
-                <textarea id="transcript" readonly></textarea>
-            </div>
-        </div>
+            <div id="status" class="status">Listen to the question, then record your answer.</div>
 
-        <div class="tips">
-            <p><strong>💡 Tips for best results:</strong></p>
-            <p>• Speak clearly and at normal pace • Keep questions under 30 seconds • Wait for processing to complete
-            </p>
-            <p><strong>🔧 Powered by:</strong> OpenAI • AssemblyAI • ElevenLabs</p>
-        </div>
+            <!-- AI Response (shown after submit) -->
+            <div id="response-panel" class="panel" style="display:none;">
+                <h3><span class="emoji">💬</span>AI Feedback</h3>
+                <audio id="ai-audio" controls autoplay></audio>
+                <div class="form-group">
+                    <label>AI Response</label>
+                    <textarea id="ai-text" readonly></textarea>
+                </div>
+                <div class="form-group">
+                    <label>Your Answer (Transcribed)</label>
+                    <textarea id="transcript" readonly></textarea>
+                </div>
+            </div>
+
+            <!-- Conversation History (collapsible) -->
+            <details class="conversation-history" id="conversation-history">
+                <summary>Previous Q&A</summary>
+                <div class="history-list" id="history-list"></div>
+            </details>
+        </section>
+
+        <!-- ===== SCREEN 3: RESULTS ===== -->
+        <section id="screen-results" class="screen">
+
+            <!-- Overall Score -->
+            <div class="results-score-card">
+                <div class="score-circle" id="score-circle">
+                    <span class="score-value" id="score-value">7.5</span>
+                    <span class="score-label">/ 10</span>
+                </div>
+                <p class="score-summary" id="score-summary">Strong performance with room for improvement.</p>
+                <span class="difficulty-badge" id="results-difficulty-badge">Intermediate</span>
+            </div>
+
+            <!-- Strengths & Weaknesses -->
+            <div class="results-grid">
+                <div class="panel results-card results-card--strengths">
+                    <h3><span class="emoji">💪</span>Strengths</h3>
+                    <ul id="strengths-list"></ul>
+                </div>
+                <div class="panel results-card results-card--weaknesses">
+                    <h3><span class="emoji">🎯</span>Areas to Improve</h3>
+                    <ul id="weaknesses-list"></ul>
+                </div>
+            </div>
+
+            <!-- Suggestions -->
+            <div class="panel results-card">
+                <h3><span class="emoji">📝</span>Improvement Suggestions</h3>
+                <ol id="suggestions-list"></ol>
+            </div>
+
+            <!-- Per-Question Breakdown -->
+            <div class="panel results-card">
+                <h3><span class="emoji">📊</span>Per-Question Breakdown</h3>
+                <div id="per-question-breakdown"></div>
+                <p id="no-breakdown-msg" class="text-secondary" style="text-align:center;">
+                    Detailed breakdown not available for this session.
+                </p>
+            </div>
+
+            <!-- Action Bar -->
+            <div class="button-group">
+                <button id="practice-again-btn" class="primary-btn primary-btn--large">
+                    <span class="emoji">🔄</span> Practice Again
+                </button>
+                <button id="try-same-btn" class="secondary-btn">
+                    <span class="emoji">🔁</span> Try Same Setup
+                </button>
+            </div>
+        </section>
+
     </div>
 
     <script type="module" src="/static/js/app.js"></script>

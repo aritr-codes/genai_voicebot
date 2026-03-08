@@ -22,7 +22,9 @@ async def _periodic_cache_cleanup():
         await asyncio.sleep(300)
         try:
             memory_cache._cleanup_old_entries()
-            logger.info("Memory cleanup completed")
+            from app.session import session_store
+            removed = session_store.cleanup_expired()
+            logger.info("Memory cleanup completed (sessions pruned: %d)", removed)
         except Exception as e:
             logger.warning("Memory cleanup failed: %s", e)
 
