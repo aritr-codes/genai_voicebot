@@ -12,7 +12,12 @@ class InterviewSession:
     difficulty: str           # beginner, intermediate, advanced
     duration_minutes: int
     topic: str
+    job_description: Optional[str] = None
+    persona: str = "neutral"              # friendly, neutral, tough
+    question_count: Optional[int] = None  # None = by-time mode; int = by-questions mode
     conversation_history: list = field(default_factory=list)  # list of {role, content} dicts
+    covered_topics: list = field(default_factory=list)        # topic hints injected into prompt to avoid repetition
+    parsed_resume: dict | None = None                         # structured resume extracted by LLM at session start
     start_time: Optional[datetime] = None
     is_active: bool = True
 
@@ -23,13 +28,19 @@ class SessionStore:
         self._lock = threading.Lock()
         self._ttl = timedelta(hours=ttl_hours)
 
-    def create(self, resume_text, difficulty, duration_minutes, topic) -> InterviewSession:
+    def create(
+        self, resume_text, difficulty, duration_minutes, topic,
+        persona="neutral", question_count=None, job_description=None,
+    ) -> InterviewSession:
         session = InterviewSession(
             session_id=uuid.uuid4().hex,
             resume_text=resume_text,
+            job_description=job_description,
             difficulty=difficulty,
             duration_minutes=duration_minutes,
             topic=topic,
+            persona=persona,
+            question_count=question_count,
             start_time=datetime.now(),
         )
         with self._lock:

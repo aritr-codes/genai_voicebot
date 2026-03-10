@@ -1,5 +1,6 @@
 /**
  * Draw real-time frequency bars on the visualizer canvas during recording.
+ * Bars have rounded tops and a subtle glow effect.
  */
 export function visualize(canvas, canvasCtx, analyser, dataArray, isRecordingFn) {
     function draw() {
@@ -16,22 +17,75 @@ export function visualize(canvas, canvasCtx, analyser, dataArray, isRecordingFn)
         canvasCtx.fillRect(0, 0, canvas.width, canvas.height);
 
         const barWidth = (canvas.width / dataArray.length) * 2.5;
-        let barHeight;
+        const radius = barWidth / 2;
         let x = 0;
 
-        for (let i = 0; i < dataArray.length; i++) {
-            barHeight = (dataArray[i] / 255) * canvas.height * 0.8;
+        canvasCtx.shadowBlur = 8;
+        canvasCtx.shadowColor = '#764ba2';
 
-            const gradient = canvasCtx.createLinearGradient(0, canvas.height - barHeight, 0, canvas.height);
+        for (let i = 0; i < dataArray.length; i++) {
+            const barHeight = Math.max((dataArray[i] / 255) * canvas.height * 0.8, 1);
+            const top = canvas.height - barHeight;
+
+            const gradient = canvasCtx.createLinearGradient(0, top, 0, canvas.height);
             gradient.addColorStop(0, '#667eea');
             gradient.addColorStop(0.5, '#764ba2');
             gradient.addColorStop(1, '#f093fb');
 
             canvasCtx.fillStyle = gradient;
-            canvasCtx.fillRect(x, canvas.height - barHeight, barWidth, barHeight);
+
+            // Bar body
+            canvasCtx.fillRect(x, top + radius, barWidth, Math.max(barHeight - radius, 0));
+            // Rounded top cap
+            canvasCtx.beginPath();
+            canvasCtx.arc(x + radius, top + radius, radius, Math.PI, 0);
+            canvasCtx.fill();
 
             x += barWidth + 1;
         }
+
+        canvasCtx.shadowBlur = 0;
+        requestAnimationFrame(draw);
+    }
+
+    draw();
+}
+
+/**
+ * Draw a gentle idle pulsing sine wave when not recording.
+ * Stops automatically when isIdleFn() returns false.
+ */
+export function idleVisualize(canvas, canvasCtx, isIdleFn) {
+    let t = 0;
+
+    function draw() {
+        if (!isIdleFn()) return;
+
+        if (canvas.width === 0 || canvas.height === 0) {
+            canvas.width = canvas.offsetWidth || 400;
+            canvas.height = canvas.offsetHeight || 120;
+        }
+
+        canvasCtx.fillStyle = '#000000';
+        canvasCtx.fillRect(0, 0, canvas.width, canvas.height);
+
+        const amplitude = 10 * (0.6 + 0.4 * Math.sin(t * 0.7));
+
+        canvasCtx.beginPath();
+        canvasCtx.strokeStyle = '#667eea';
+        canvasCtx.lineWidth = 2;
+        canvasCtx.shadowBlur = 6;
+        canvasCtx.shadowColor = '#667eea';
+
+        for (let x = 0; x < canvas.width; x++) {
+            const y = canvas.height / 2 + Math.sin((x / canvas.width) * Math.PI * 4 + t) * amplitude;
+            if (x === 0) canvasCtx.moveTo(x, y);
+            else canvasCtx.lineTo(x, y);
+        }
+
+        canvasCtx.stroke();
+        canvasCtx.shadowBlur = 0;
+        t += 0.04;
 
         requestAnimationFrame(draw);
     }

@@ -15,6 +15,10 @@
         <div class="header">
             <div class="title">🎤 AI Interview Assistant</div>
             <div class="subtitle" id="header-subtitle">Set up your practice interview</div>
+            <div class="header-actions">
+                <button id="history-nav-btn" class="icon-btn" title="View history" aria-label="View history">📊</button>
+                <button id="theme-toggle" class="theme-toggle" title="Toggle dark/light theme" aria-label="Toggle theme">🌙</button>
+            </div>
         </div>
 
         <!-- ===== SCREEN 1: SETUP ===== -->
@@ -35,6 +39,15 @@
                         <button type="button" class="icon-btn" id="remove-resume-btn" title="Remove resume">✕</button>
                     </div>
                 </div>
+            </div>
+
+            <!-- Job Description -->
+            <div class="panel setup-panel">
+                <h3><span class="emoji">📋</span>Job Description <span class="optional-tag">optional</span></h3>
+                <textarea id="jd-input" class="jd-textarea"
+                    placeholder="Paste the job description here. The interviewer will focus on required skills not clearly covered by your resume…"
+                    rows="5" maxlength="4000"></textarea>
+                <p class="setting-hint" id="jd-char-count">0 / 4000 characters</p>
             </div>
 
             <!-- Configuration -->
@@ -60,13 +73,47 @@
                     </div>
                 </div>
 
-                <!-- Duration -->
+                <!-- Session Mode -->
                 <div class="setting-group">
+                    <label class="setting-label">Session Mode</label>
+                    <div class="mode-toggle" id="mode-toggle">
+                        <button type="button" class="mode-btn mode-btn--active" data-mode="time">By Time</button>
+                        <button type="button" class="mode-btn" data-mode="questions">By Questions</button>
+                    </div>
+                </div>
+
+                <!-- Duration (by-time mode) -->
+                <div class="setting-group" id="duration-group">
                     <label class="setting-label">Duration</label>
                     <div class="btn-group" id="duration-control">
                         <button type="button" class="pill-btn" data-value="15">15 min</button>
                         <button type="button" class="pill-btn pill-btn--active" data-value="30">30 min</button>
                         <button type="button" class="pill-btn" data-value="45">45 min</button>
+                    </div>
+                    <p class="setting-hint" id="duration-hint">~8–12 questions estimated</p>
+                </div>
+
+                <!-- Question count (by-questions mode) -->
+                <div class="setting-group" id="questions-group" style="display:none">
+                    <label class="setting-label">Number of Questions</label>
+                    <div class="btn-group" id="question-count-control">
+                        <button type="button" class="pill-btn" data-value="5">5</button>
+                        <button type="button" class="pill-btn pill-btn--active" data-value="10">10</button>
+                        <button type="button" class="pill-btn" data-value="15">15</button>
+                        <button type="button" class="pill-btn" data-value="custom">Custom</button>
+                    </div>
+                    <input type="number" id="custom-question-count" class="custom-count-input" min="1" max="30"
+                        placeholder="Enter count…" style="display:none" />
+                    <p class="setting-hint" id="questions-hint">~20–30 min estimated at intermediate level</p>
+                </div>
+
+                <!-- Persona -->
+                <div class="setting-group">
+                    <label class="setting-label">Interviewer Style</label>
+                    <div class="btn-group" id="persona-control">
+                        <button type="button" class="pill-btn" data-value="friendly">Friendly</button>
+                        <button type="button" class="pill-btn pill-btn--active" data-value="neutral">Neutral</button>
+                        <button type="button" class="pill-btn" data-value="tough">Tough</button>
                     </div>
                 </div>
 
@@ -74,11 +121,33 @@
                 <div class="setting-group">
                     <label class="setting-label">Topic / Role</label>
                     <select id="topic-select" class="select-input">
-                        <option value="general">General</option>
-                        <option value="machine_learning">Machine Learning</option>
-                        <option value="data_engineering">Data Engineering</option>
-                        <option value="backend_development">Backend Development</option>
-                        <option value="system_design">System Design</option>
+                        <optgroup label="Engineering">
+                            <option value="backend_engineering">Backend Engineering</option>
+                            <option value="frontend_engineering">Frontend Engineering</option>
+                            <option value="full_stack">Full Stack Engineering</option>
+                            <option value="mobile">Mobile (iOS/Android)</option>
+                        </optgroup>
+                        <optgroup label="Data &amp; AI">
+                            <option value="machine_learning">Machine Learning / AI</option>
+                            <option value="data_engineering">Data Engineering &amp; Analytics</option>
+                        </optgroup>
+                        <optgroup label="Architecture">
+                            <option value="system_design">System Design</option>
+                        </optgroup>
+                        <optgroup label="Product">
+                            <option value="product_management">Product Management</option>
+                        </optgroup>
+                        <optgroup label="Operations">
+                            <option value="devops_cloud">DevOps / Cloud</option>
+                        </optgroup>
+                        <optgroup label="Marketing">
+                            <option value="digital_marketing">Digital Marketing</option>
+                            <option value="seo_content">SEO / Content Strategy</option>
+                            <option value="performance_marketing">Performance Marketing (Paid Ads)</option>
+                        </optgroup>
+                        <optgroup label="General">
+                            <option value="behavioral">Behavioral (STAR Method)</option>
+                        </optgroup>
                     </select>
                 </div>
             </div>
@@ -120,6 +189,12 @@
                 <h3><span class="emoji">🤖</span>Interviewer</h3>
                 <p class="question-text" id="question-text">Tell me about yourself and your experience.</p>
                 <audio id="question-audio" controls style="display:none;"></audio>
+            </div>
+
+            <!-- Auto-record countdown (shown after TTS question finishes) -->
+            <div id="autorecord-countdown" class="autorecord-banner" style="display:none;">
+                Recording starts in <span id="countdown-secs">3</span>s…
+                <button type="button" id="cancel-autorecord-btn" class="link-btn">Record now</button>
             </div>
 
             <!-- Recording Panel (reused structure) -->
@@ -223,6 +298,12 @@
                 <ol id="suggestions-list"></ol>
             </div>
 
+            <!-- Speaking Metrics -->
+            <div class="panel results-card" id="speaking-metrics-card" style="display:none">
+                <h3><span class="emoji">🗣️</span>Speaking Metrics</h3>
+                <div class="speaking-metrics-grid" id="speaking-metrics-grid"></div>
+            </div>
+
             <!-- Per-Question Breakdown -->
             <div class="panel results-card">
                 <h3><span class="emoji">📊</span>Per-Question Breakdown</h3>
@@ -240,7 +321,39 @@
                 <button id="try-same-btn" class="secondary-btn">
                     <span class="emoji">🔁</span> Try Same Setup
                 </button>
+                <button id="view-history-btn" class="secondary-btn">
+                    <span class="emoji">📊</span> View History
+                </button>
             </div>
+        </section>
+
+        <!-- ===== SCREEN 4: HISTORY ===== -->
+        <section id="screen-history" class="screen">
+
+            <div class="history-header">
+                <h2>Practice History</h2>
+                <button id="history-back-btn" class="secondary-btn secondary-btn--sm">← Back</button>
+            </div>
+
+            <!-- Stats strip -->
+            <div class="stats-strip" id="stats-strip"></div>
+
+            <!-- Sparkline -->
+            <div class="panel">
+                <div class="history-chart-header">
+                    <h3><span class="emoji">📈</span>Score Trend</h3>
+                    <select id="topic-filter" class="select-input select-input--sm"></select>
+                </div>
+                <canvas id="sparkline-canvas" class="sparkline-canvas"></canvas>
+            </div>
+
+            <!-- Session cards -->
+            <div class="panel">
+                <h3><span class="emoji">🗂️</span>Sessions</h3>
+                <div id="history-cards"></div>
+                <p id="history-empty-msg" class="history-empty-hint">No sessions yet. Complete an interview to see your history.</p>
+            </div>
+
         </section>
 
     </div>

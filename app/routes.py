@@ -12,8 +12,8 @@ from app.exceptions import VoicebotError, AudioError, ConfigurationError
 from app.monitoring import perf_monitor
 from app.pipeline import process_audio_pipeline
 from app.session import session_store
-from app.prompts import build_interview_prompt, build_opening_instruction
-from app.services.llm import generate_llm_response_with_history
+from app.prompts import build_interview_prompt, build_opening_instruction, _TOPIC_LABELS
+from app.services.llm import generate_llm_response_with_history, parse_resume
 from app.services.tts import generate_tts_audio_bytes
 from app.pipeline import process_turn_pipeline
 
@@ -37,7 +37,19 @@ async def health():
     return {
         "status": "ok",
         "configured": settings.is_configured(),
+        "services": settings.config_status(),
+        "llm_model": settings.openai_model,
+        "tts_voice": settings.tts_voice_id,
         "metrics": perf_monitor.get_avg_times(),
+    }
+
+
+@router.get("/config")
+async def get_config():
+    """Frontend-safe config values (no secrets)."""
+    return {
+        "max_record_seconds": settings.max_record_seconds,
+        "max_file_mb": settings.max_file_mb,
     }
 
 
@@ -75,9 +87,12 @@ async def process_audio_endpoint(audio: UploadFile = File(...)):
 
 class StartSessionRequest(BaseModel):
     resume_text: str | None = None
+    job_description: str | None = None
     difficulty: str = "intermediate"
     duration_minutes: int = 30
     topic: str = "general"
+    persona: str = "neutral"
+    question_count: int | None = None  # if set, session runs by questions not time
 
 
 class EndSessionRequest(BaseModel):
@@ -91,15 +106,25 @@ async def start_session_endpoint(req: StartSessionRequest):
 
     session = session_store.create(
         resume_text=req.resume_text,
+        job_description=req.job_description,
         difficulty=req.difficulty,
         duration_minutes=req.duration_minutes,
         topic=req.topic,
+        persona=req.persona,
+        question_count=req.question_count,
     )
+
+    # Parse resume once at session start; falls back to raw text if parsing fails
+    if req.resume_text:
+        session.parsed_resume = await asyncio.to_thread(parse_resume, req.resume_text)
 
     system_prompt = build_interview_prompt(
         difficulty=session.difficulty,
         topic=session.topic,
         resume_text=session.resume_text,
+        parsed_resume=session.parsed_resume,
+        persona=session.persona,
+        job_description=session.job_description,
     )
     opening = build_opening_instruction(session.difficulty, session.topic)
 
@@ -160,11 +185,16 @@ async def process_turn_endpoint(
             logger.error("process_turn error: %s", e, exc_info=True)
             raise HTTPException(status_code=500, detail=str(e))
 
+    user_turns = len([m for m in session.conversation_history if m["role"] == "user"])
+    session_complete = (
+        session.question_count is not None and user_turns >= session.question_count
+    )
     return {
         "transcript": transcript,
         "ai_response": ai_text,
         "audio_base64": base64.b64encode(tts_bytes).decode(),
-        "question_number": len([m for m in session.conversation_history if m["role"] == "user"]),
+        "question_number": user_turns,
+        "session_complete": session_complete,
     }
 
 
@@ -198,9 +228,22 @@ async def end_session_endpoint(req: EndSessionRequest):
     if eval_prompt_path.exists():
         evaluation_system = eval_prompt_path.read_text(encoding="utf-8")
     else:
-        evaluation_system = "You are an expert interview coach. Always respond with valid JSON only."
+        logger.warning("evaluation_system.txt not found at %s — using inline fallback", eval_prompt_path)
+        evaluation_system = (
+            'You are an expert interview coach. Return ONLY a valid JSON object with this exact structure:\n'
+            '{"overall_score": <float 1-10>, "summary": "<str>", "strengths": ["<str>"], '
+            '"weaknesses": ["<str>"], "suggestions": ["<str>"], "per_question": ['
+            '{"question": "<str>", "answer_summary": "<str>", "score": <int 1-10>, '
+            '"feedback": "<str>", "dimensions": {"technical_accuracy": <int 1-5>, '
+            '"communication": <int 1-5>, "completeness": <int 1-5>, "confidence": <int 1-5>}, '
+            '"ideal_answer_hints": ["<str>"], "resume_alignment": "<Consistent|Inconsistent|N/A>"}]}'
+        )
 
-    evaluation_request = f"Here is the full interview transcript to evaluate:\n\n{full_transcript}"
+    role_label = _TOPIC_LABELS.get(session.topic, session.topic.replace("_", " ").title())
+    evaluation_request = (
+        f"Role: {role_label}\n\n"
+        f"Here is the full interview transcript to evaluate:\n\n{full_transcript}"
+    )
 
     async with _semaphore:
         try:
@@ -209,6 +252,7 @@ async def end_session_endpoint(req: EndSessionRequest):
                 evaluation_system,
                 [],
                 evaluation_request,
+                settings.evaluation_max_tokens,
             )
         except Exception as e:
             logger.error("end_session evaluation error: %s", e, exc_info=True)
@@ -219,7 +263,8 @@ async def end_session_endpoint(req: EndSessionRequest):
         # Strip markdown fences if present
         cleaned = raw.strip().removeprefix("```json").removeprefix("```").removesuffix("```").strip()
         evaluation = json.loads(cleaned)
-    except Exception:
+    except Exception as parse_err:
+        logger.warning("Evaluation JSON parse failed (%s). Raw response: %.200s", parse_err, raw)
         evaluation = {
             "overall_score": 5.0,
             "summary": "Evaluation could not be parsed. Here is the raw feedback.",

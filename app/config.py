@@ -15,14 +15,20 @@ class Settings(BaseSettings):
     elevenlabs_api_key: SecretStr = SecretStr("")
 
     # Model configuration
-    openai_model: str = "gpt-3.5-turbo"
-    llm_max_tokens: int = 200
-    llm_temperature: float = 0.7
-    llm_presence_penalty: float = 0.1
-    llm_frequency_penalty: float = 0.1
+    openai_model: str = "gpt-4o-mini"
+    llm_max_tokens: int = 500
+    llm_temperature: float = 0.8
+    llm_presence_penalty: float = 0.3
+    llm_frequency_penalty: float = 0.2
 
     # TTS configuration
-    tts_voice_id: str = "3gsg3cxXyFLcGIfNbM6C"
+    tts_provider: str = "openai"                   # "openai" | "elevenlabs" (elevenlabs requires ffmpeg)
+    # OpenAI TTS (default — no ffmpeg required, returns WAV directly)
+    openai_tts_voice: str = "onyx"                 # alloy, echo, fable, onyx, nova, shimmer
+    openai_tts_model: str = "tts-1-hd"             # tts-1 (faster) | tts-1-hd (higher quality)
+    # ElevenLabs TTS (requires ffmpeg installed on host)
+    tts_voice_id: str = "EXAVITQu4vr4xnSDxMaL"   # Sarah — free-plan pre-made voice
+    tts_model_id: str = "eleven_turbo_v2_5"        # faster; use eleven_multilingual_v2 for multilingual
     tts_sample_rate: int = 22050
     tts_channels: int = 1
 
@@ -60,11 +66,13 @@ class Settings(BaseSettings):
     }
 
     def is_configured(self) -> bool:
-        return all([
+        required = [
             self.openai_api_key.get_secret_value(),
             self.assemblyai_api_key.get_secret_value(),
-            self.elevenlabs_api_key.get_secret_value(),
-        ])
+        ]
+        if self.tts_provider == "elevenlabs":
+            required.append(self.elevenlabs_api_key.get_secret_value())
+        return all(required)
 
     def config_status(self) -> dict[str, bool]:
         return {

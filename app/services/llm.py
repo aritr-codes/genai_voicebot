@@ -1,3 +1,4 @@
+import json
 import logging
 
 import httpx
@@ -99,11 +100,15 @@ def generate_llm_response_with_history(
     system_prompt: str,
     conversation_history: list[dict],
     user_text: str,
+    max_tokens: int | None = None,
 ) -> str:
     """Multi-turn variant: passes full conversation history to the LLM.
 
     If history exceeds ~3000 tokens (estimated), the oldest turns are dropped
     to stay within context limits (sliding window).
+
+    Args:
+        max_tokens: Override for token limit. Defaults to settings.llm_max_tokens.
     """
     api_key = settings.openai_api_key.get_secret_value()
     if not api_key:
@@ -127,7 +132,7 @@ def generate_llm_response_with_history(
         response = client.chat.completions.create(
             model=settings.openai_model,
             messages=messages,
-            max_tokens=settings.llm_max_tokens,
+            max_tokens=max_tokens if max_tokens is not None else settings.llm_max_tokens,
             temperature=settings.llm_temperature,
             presence_penalty=settings.llm_presence_penalty,
             frequency_penalty=settings.llm_frequency_penalty,
@@ -137,3 +142,54 @@ def generate_llm_response_with_history(
     except Exception as e:
         logger.error("OpenAI multi-turn call failed: %s", e)
         raise LLMError("Failed to generate AI response", str(e))
+
+
+def parse_resume(resume_text: str) -> dict | None:
+    """Parse a resume into structured JSON once at session start.
+
+    Returns a dict with keys: skills, experience, education, projects.
+    Returns None on any failure — callers fall back to raw resume text.
+    Requires GPT-4o-mini or later (uses json_object response_format).
+    """
+    if not resume_text or len(resume_text.strip()) < 50:
+        return None
+
+    system = (
+        "You are a resume parser. Extract structured information from the resume text. "
+        "Return ONLY a valid JSON object with exactly these keys:\n"
+        '{\n'
+        '  "skills": ["list of technical and soft skills mentioned"],\n'
+        '  "experience": [\n'
+        '    {"title": "Job Title", "company": "Company Name", "duration": "e.g. 2 years",\n'
+        '     "highlights": ["key achievement or responsibility"]}\n'
+        '  ],\n'
+        '  "education": [{"degree": "...", "institution": "...", "year": "..."}],\n'
+        '  "projects": [{"name": "...", "tech_stack": ["..."], "description": "1 sentence"}]\n'
+        "}\n"
+        "If a section has no data, use an empty list. Return only JSON — no markdown, no explanation."
+    )
+
+    client = _get_openai_client()
+    try:
+        response = client.chat.completions.create(
+            model=settings.openai_model,
+            messages=[
+                {"role": "system", "content": system},
+                {"role": "user", "content": resume_text[:4000]},
+            ],
+            max_tokens=800,
+            temperature=0.0,
+            response_format={"type": "json_object"},
+        )
+        raw = response.choices[0].message.content.strip()
+        parsed = json.loads(raw)
+        logger.info(
+            "Resume parsed: %d skills, %d experience entries, %d projects",
+            len(parsed.get("skills", [])),
+            len(parsed.get("experience", [])),
+            len(parsed.get("projects", [])),
+        )
+        return parsed
+    except Exception as e:
+        logger.warning("Resume parsing failed: %s", e)
+        return None

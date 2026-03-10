@@ -1,26 +1,42 @@
 import { AudioRecorder } from './recorder.js';
-import { visualize, drawWaveform } from './visualizer.js';
+import { visualize, drawWaveform, idleVisualize } from './visualizer.js';
 import { Timer } from './timer.js';
 import {
     showScreen, getSession, resetSession,
-    setDifficulty, setDuration, setTopic, setResumeText,
+    setDifficulty, setDuration, setTopic, setResumeText, setJobDescription,
+    setPersona, setSessionMode, setQuestionCount,
     startSession, submitAnswer, endSession,
+    saveSessionToHistory,
 } from './session.js';
+import { renderHistoryScreen } from './history.js';
 
 // ============================================================
 // DOM refs — Setup screen
 // ============================================================
-const difficultyBtns = document.querySelectorAll('#difficulty-control .seg-btn');
-const durationBtns   = document.querySelectorAll('#duration-control .pill-btn');
-const topicSelect    = document.getElementById('topic-select');
-const startBtn       = document.getElementById('start-interview-btn');
+const difficultyBtns    = document.querySelectorAll('#difficulty-control .seg-btn');
+const modeBtns          = document.querySelectorAll('#mode-toggle .mode-btn');
+const durationGroup     = document.getElementById('duration-group');
+const questionsGroup    = document.getElementById('questions-group');
+const durationBtns      = document.querySelectorAll('#duration-control .pill-btn');
+const durationHint      = document.getElementById('duration-hint');
+const qcountBtns        = document.querySelectorAll('#question-count-control .pill-btn');
+const customQCountInput = document.getElementById('custom-question-count');
+const questionsHint     = document.getElementById('questions-hint');
+const personaBtns       = document.querySelectorAll('#persona-control .pill-btn');
+const topicSelect       = document.getElementById('topic-select');
+const startBtn          = document.getElementById('start-interview-btn');
 const dropZone       = document.getElementById('drop-zone');
 const resumeInput    = document.getElementById('resume-input');
 const browseBtn      = document.getElementById('browse-btn');
 const dropPrompt     = document.getElementById('drop-prompt');
 const dropInfo       = document.getElementById('drop-info');
 const resumeFilename = document.getElementById('resume-filename');
-const removeResumeBtn= document.getElementById('remove-resume-btn');
+const removeResumeBtn    = document.getElementById('remove-resume-btn');
+const jdInput            = document.getElementById('jd-input');
+const jdCharCount        = document.getElementById('jd-char-count');
+const autorecordBanner   = document.getElementById('autorecord-countdown');
+const countdownSecsEl    = document.getElementById('countdown-secs');
+const cancelAutorecordBtn= document.getElementById('cancel-autorecord-btn');
 
 // ============================================================
 // DOM refs — Interview screen
@@ -61,10 +77,30 @@ const resultsDifficulty = document.getElementById('results-difficulty-badge');
 const strengthsList     = document.getElementById('strengths-list');
 const weaknessesList    = document.getElementById('weaknesses-list');
 const suggestionsList   = document.getElementById('suggestions-list');
-const perQuestionDiv    = document.getElementById('per-question-breakdown');
-const noBreakdownMsg    = document.getElementById('no-breakdown-msg');
-const practiceAgainBtn  = document.getElementById('practice-again-btn');
-const trySameBtn        = document.getElementById('try-same-btn');
+const perQuestionDiv      = document.getElementById('per-question-breakdown');
+const noBreakdownMsg      = document.getElementById('no-breakdown-msg');
+const speakingMetricsCard = document.getElementById('speaking-metrics-card');
+const speakingMetricsGrid = document.getElementById('speaking-metrics-grid');
+const practiceAgainBtn    = document.getElementById('practice-again-btn');
+const trySameBtn          = document.getElementById('try-same-btn');
+
+// ============================================================
+// DOM refs — Header + misc
+// ============================================================
+const themeToggle    = document.getElementById('theme-toggle');
+const historyNavBtn  = document.getElementById('history-nav-btn');
+const audioContainer = document.querySelector('.audio-container');
+
+// ============================================================
+// DOM refs — History screen
+// ============================================================
+const sparklineCanvas  = document.getElementById('sparkline-canvas');
+const topicFilterEl    = document.getElementById('topic-filter');
+const statsStripEl     = document.getElementById('stats-strip');
+const historyCardsEl   = document.getElementById('history-cards');
+const historyEmptyMsg  = document.getElementById('history-empty-msg');
+const historyBackBtn   = document.getElementById('history-back-btn');
+const viewHistoryBtn   = document.getElementById('view-history-btn');
 
 // ============================================================
 // Audio recorder + timer
@@ -74,6 +110,92 @@ const waveCtx   = waveformCanvas.getContext('2d');
 const recorder  = new AudioRecorder();
 const timer     = new Timer();
 let progressInterval = null;
+
+// ============================================================
+// T5 — Theme toggle
+// ============================================================
+
+(function initTheme() {
+    if (localStorage.getItem('theme') === 'dark') {
+        document.body.setAttribute('data-theme', 'dark');
+        themeToggle.textContent = '☀️';
+    }
+})();
+
+themeToggle.addEventListener('click', () => {
+    const isDark = document.body.getAttribute('data-theme') === 'dark';
+    if (isDark) {
+        document.body.removeAttribute('data-theme');
+        themeToggle.textContent = '🌙';
+        localStorage.setItem('theme', 'light');
+    } else {
+        document.body.setAttribute('data-theme', 'dark');
+        themeToggle.textContent = '☀️';
+        localStorage.setItem('theme', 'dark');
+    }
+});
+
+// ============================================================
+// T2 — History navigation
+// ============================================================
+
+let _historyPreviousScreen = 'screen-setup';
+
+function openHistory() {
+    _historyPreviousScreen = document.querySelector('.screen--active')?.id ?? 'screen-setup';
+    renderHistoryScreen({
+        sparklineCanvas,
+        topicFilterEl,
+        statsStripEl,
+        cardsEl:      historyCardsEl,
+        emptyMsgEl:   historyEmptyMsg,
+    });
+    showScreen('screen-history');
+}
+
+historyNavBtn.addEventListener('click', openHistory);
+historyBackBtn.addEventListener('click', () => showScreen(_historyPreviousScreen));
+viewHistoryBtn.addEventListener('click', openHistory);
+
+// Re-render when topic filter changes
+topicFilterEl.addEventListener('change', () => {
+    renderHistoryScreen({
+        sparklineCanvas,
+        topicFilterEl,
+        statsStripEl,
+        cardsEl:    historyCardsEl,
+        emptyMsgEl: historyEmptyMsg,
+    });
+});
+
+// Idle visualizer state flag
+let _isIdle = false;
+
+// Collect transcripts for client-side speaking metrics
+let _sessionTranscripts = [];
+
+const FILLER_WORDS = ['um', 'uh', 'like', 'you know', 'basically', 'literally',
+    'actually', 'so', 'right', 'okay', 'well', 'hmm', 'er', 'ah'];
+
+function countFillerWords(text) {
+    const lower = text.toLowerCase();
+    return FILLER_WORDS.reduce((count, word) => {
+        const re = new RegExp(`\\b${word}\\b`, 'g');
+        return count + (lower.match(re) ?? []).length;
+    }, 0);
+}
+
+function computeSpeakingMetrics(transcripts) {
+    if (!transcripts.length) return null;
+    const wordCounts = transcripts.map(t => t.split(/\s+/).filter(Boolean).length);
+    const fillerCounts = transcripts.map(countFillerWords);
+    return {
+        filler_word_count: fillerCounts.reduce((a, b) => a + b, 0),
+        avg_response_words: Math.round(wordCounts.reduce((a, b) => a + b, 0) / wordCounts.length),
+        longest_answer: wordCounts.indexOf(Math.max(...wordCounts)) + 1,
+        shortest_answer: wordCounts.indexOf(Math.min(...wordCounts)) + 1,
+    };
+}
 
 // ============================================================
 // Setup screen logic
@@ -88,12 +210,68 @@ difficultyBtns.forEach(btn => {
     });
 });
 
+// Session Mode toggle
+modeBtns.forEach(btn => {
+    btn.addEventListener('click', () => {
+        modeBtns.forEach(b => b.classList.remove('mode-btn--active'));
+        btn.classList.add('mode-btn--active');
+        const mode = btn.dataset.mode;
+        setSessionMode(mode);
+        if (mode === 'time') {
+            durationGroup.style.display = '';
+            questionsGroup.style.display = 'none';
+        } else {
+            durationGroup.style.display = 'none';
+            questionsGroup.style.display = '';
+            updateQuestionsHint();
+        }
+    });
+});
+
 // Duration
 durationBtns.forEach(btn => {
     btn.addEventListener('click', () => {
         durationBtns.forEach(b => b.classList.remove('pill-btn--active'));
         btn.classList.add('pill-btn--active');
         setDuration(parseInt(btn.dataset.value, 10));
+    });
+});
+
+// Question count
+qcountBtns.forEach(btn => {
+    btn.addEventListener('click', () => {
+        qcountBtns.forEach(b => b.classList.remove('pill-btn--active'));
+        btn.classList.add('pill-btn--active');
+        if (btn.dataset.value === 'custom') {
+            customQCountInput.style.display = '';
+            customQCountInput.focus();
+        } else {
+            customQCountInput.style.display = 'none';
+            setQuestionCount(parseInt(btn.dataset.value, 10));
+            updateQuestionsHint();
+        }
+    });
+});
+customQCountInput.addEventListener('input', () => {
+    const val = parseInt(customQCountInput.value, 10);
+    if (val > 0) { setQuestionCount(val); updateQuestionsHint(); }
+});
+
+function updateQuestionsHint() {
+    const s = getSession();
+    const minsPerQ = { beginner: 3, intermediate: 4, advanced: 6 };
+    const avg = minsPerQ[s.difficulty] ?? 4;
+    const lo = s.questionCount * (avg - 1);
+    const hi = s.questionCount * (avg + 1);
+    questionsHint.textContent = `~${lo}–${hi} min estimated at ${s.difficulty} level`;
+}
+
+// Persona
+personaBtns.forEach(btn => {
+    btn.addEventListener('click', () => {
+        personaBtns.forEach(b => b.classList.remove('pill-btn--active'));
+        btn.classList.add('pill-btn--active');
+        setPersona(btn.dataset.value);
     });
 });
 
@@ -123,6 +301,12 @@ removeResumeBtn.addEventListener('click', () => {
     resumeInput.value = '';
     dropPrompt.style.display = '';
     dropInfo.style.display = 'none';
+});
+
+jdInput.addEventListener('input', () => {
+    const text = jdInput.value.trim();
+    setJobDescription(text || null);
+    jdCharCount.textContent = `${jdInput.value.length} / 4000 characters`;
 });
 
 async function handleResumeFile(file) {
@@ -175,14 +359,22 @@ startBtn.addEventListener('click', async () => {
     startBtn.innerHTML = '<span class="emoji">⏳</span> Starting…';
     try {
         const data = await startSession();
-        const session = getSession();
+        const s = getSession();
 
+        const modeLabel = s.sessionMode === 'questions'
+            ? `${s.questionCount} questions`
+            : `${s.durationMinutes} min`;
         document.getElementById('header-subtitle').textContent =
-            `${capitalize(session.difficulty)} · ${session.durationMinutes} min · ${formatTopic(session.topic)}`;
+            `${capitalize(s.difficulty)} · ${modeLabel} · ${formatTopic(s.topic)}`;
 
         showQuestionInInterviewScreen(data.question_text, data.question_audio_base64);
         showScreen('screen-interview');
-        startInterviewTimer(session.durationMinutes * 60);
+
+        if (s.sessionMode === 'questions') {
+            startElapsedTimer();
+        } else {
+            startCountdownTimer(s.durationMinutes * 60);
+        }
     } catch (err) {
         console.error('Start session error:', err);
         alert(`Failed to start interview: ${err.message}\n\nCheck that your API keys are configured and the server is running.`);
@@ -205,9 +397,18 @@ function showQuestionInInterviewScreen(text, audioBase64) {
         const wav = base64ToBlob(audioBase64, 'audio/wav');
         questionAudio.src = URL.createObjectURL(wav);
         questionAudio.style.display = 'block';
+        questionAudio.onended = () => scheduleAutoRecord(3);
         questionAudio.play().catch(() => {});
     } else {
         questionAudio.style.display = 'none';
+        // Fallback: browser speech synthesis when ElevenLabs audio is unavailable
+        if (text && 'speechSynthesis' in window) {
+            window.speechSynthesis.cancel();
+            const utterance = new SpeechSynthesisUtterance(text);
+            utterance.rate = 0.9;
+            utterance.onend = () => scheduleAutoRecord(3);
+            window.speechSynthesis.speak(utterance);
+        }
     }
 
     // Reset recording area for new question
@@ -217,35 +418,63 @@ function showQuestionInInterviewScreen(text, audioBase64) {
     submitAnswerBtn.disabled = true;
     nextQuestionBtn.style.display = 'none';
     updateStatus('', 'Listen to the question, then record your answer.');
+
+    // Start idle visualization in visualizer canvas
+    _isIdle = true;
+    visualizerCanvas.width = visualizerCanvas.offsetWidth || 400;
+    visualizerCanvas.height = visualizerCanvas.offsetHeight || 120;
+    visualizerContainer.classList.add('active');
+    idleVisualize(visualizerCanvas, canvasCtx, () => _isIdle && !recorder.isRecording);
+    audioContainer.classList.add('idle-pulse');
 }
 
 function updateQuestionBadge() {
     const s = getSession();
-    questionBadge.textContent = `Q ${s.currentQuestion + 1} / ~${s.totalQuestions}`;
+    if (s.sessionMode === 'questions') {
+        questionBadge.textContent = `Q ${s.currentQuestion + 1} / ${s.questionCount}`;
+    } else {
+        questionBadge.textContent = `Q ${s.currentQuestion + 1}`;
+    }
 }
 
-// Timer
-function startInterviewTimer(totalSeconds) {
-    timer.onTick(({ remaining, total, percent }) => {
+// Timer — countdown (by-time mode)
+function startCountdownTimer(totalSeconds) {
+    timer.onTick(({ remaining, percent }) => {
         const mm = String(Math.floor(remaining / 60)).padStart(2, '0');
         const ss = String(remaining % 60).padStart(2, '0');
         timerDisplay.textContent = `${mm}:${ss}`;
-
         timerDisplay.classList.remove('timer-display--warning', 'timer-display--danger');
         if (percent < 20) timerDisplay.classList.add('timer-display--danger');
         else if (percent < 50) timerDisplay.classList.add('timer-display--warning');
     });
-
     timer.onExpire(async () => {
         updateStatus('processing', 'Time\'s up! Generating your feedback…');
         await finishInterview();
     });
-
     timer.start(totalSeconds);
+}
+
+// Timer — elapsed (by-questions mode)
+let _elapsedSeconds = 0;
+let _elapsedInterval = null;
+function startElapsedTimer() {
+    _elapsedSeconds = 0;
+    timerDisplay.textContent = '00:00';
+    timerDisplay.classList.remove('timer-display--warning', 'timer-display--danger');
+    _elapsedInterval = setInterval(() => {
+        _elapsedSeconds++;
+        const mm = String(Math.floor(_elapsedSeconds / 60)).padStart(2, '0');
+        const ss = String(_elapsedSeconds % 60).padStart(2, '0');
+        timerDisplay.textContent = `${mm}:${ss}`;
+    }, 1000);
+}
+function stopElapsedTimer() {
+    if (_elapsedInterval) { clearInterval(_elapsedInterval); _elapsedInterval = null; }
 }
 
 // Recording
 recorder.onRecordingComplete = (blob) => {
+    stopBtn.classList.remove('btn-recording-pulse');
     const audioUrl = URL.createObjectURL(blob);
     previewAudio.src = audioUrl;
     previewAudio.style.display = 'block';
@@ -261,12 +490,46 @@ recorder.onRecordingComplete = (blob) => {
 
 recorder.onError = (msg) => updateStatus('error', msg);
 
+// ============================================================
+// Auto-record countdown (triggered after TTS question audio ends)
+// ============================================================
+let _autoRecordTimer = null;
+
+function scheduleAutoRecord(seconds = 3) {
+    let remaining = seconds;
+    autorecordBanner.style.display = 'flex';
+    countdownSecsEl.textContent = remaining;
+    _autoRecordTimer = setInterval(async () => {
+        remaining--;
+        countdownSecsEl.textContent = remaining;
+        if (remaining <= 0) {
+            cancelAutoRecord();
+            await startRecording();
+        }
+    }, 1000);
+}
+
+function cancelAutoRecord() {
+    clearInterval(_autoRecordTimer);
+    _autoRecordTimer = null;
+    autorecordBanner.style.display = 'none';
+}
+
+cancelAutorecordBtn.addEventListener('click', async () => {
+    cancelAutoRecord();
+    await startRecording();
+});
+
 async function startRecording() {
+    cancelAutoRecord(); // dismiss any pending countdown if manually triggered
     await recorder.start();
     if (!recorder.isRecording) return;
 
+    _isIdle = false;
+    audioContainer.classList.remove('idle-pulse');
     recordBtn.style.display = 'none';
     stopBtn.style.display = 'inline-block';
+    stopBtn.classList.add('btn-recording-pulse');
     recordingStatus.textContent = 'Recording… (Max 30 seconds)';
     recordingPanel.classList.add('active');
     progressBar.classList.add('active');
@@ -290,6 +553,7 @@ function stopRecording() {
     recorder.stop();
     recordBtn.style.display = 'inline-block';
     stopBtn.style.display = 'none';
+    stopBtn.classList.remove('btn-recording-pulse');
     recordingStatus.textContent = '';
     if (progressInterval) clearInterval(progressInterval);
 }
@@ -307,6 +571,9 @@ submitAnswerBtn.addEventListener('click', async () => {
     try {
         const data = await submitAnswer(blob);
 
+        // Collect transcript for speaking metrics
+        if (data.transcript) _sessionTranscripts.push(data.transcript);
+
         // Show transcript + AI response
         transcriptElem.value = data.transcript;
         aiText.value = data.ai_response;
@@ -314,6 +581,9 @@ submitAnswerBtn.addEventListener('click', async () => {
         if (data.audio_base64) {
             const wav = base64ToBlob(data.audio_base64, 'audio/wav');
             aiAudio.src = URL.createObjectURL(wav);
+            aiAudio.onended = () => {
+                if (!data.session_complete) nextQuestionBtn.classList.add('next-question-pulse');
+            };
             aiAudio.play().catch(() => {});
         }
         responsePanel.style.display = 'block';
@@ -323,8 +593,14 @@ submitAnswerBtn.addEventListener('click', async () => {
         appendHistory('assistant', data.ai_response);
 
         submitAnswerBtn.style.display = 'none';
-        nextQuestionBtn.style.display = '';
-        updateStatus('success', 'Answer submitted! Review the response, then continue.');
+        if (data.session_complete) {
+            nextQuestionBtn.style.display = 'none';
+            updateStatus('success', 'All questions complete! Generating your report…');
+            await finishInterview();
+        } else {
+            nextQuestionBtn.style.display = '';
+            updateStatus('success', 'Answer submitted! Review the response, then continue.');
+        }
     } catch (err) {
         if (err.message.includes('Session not found') || err.message.includes('already ended')) {
             updateStatus('error', 'Session expired. Please start a new interview.');
@@ -340,24 +616,18 @@ submitAnswerBtn.addEventListener('click', async () => {
 });
 
 // Next question — the AI's last response already contains the next question
-nextQuestionBtn.addEventListener('click', async () => {
-    const session = getSession();
-    if (session.currentQuestion >= session.totalQuestions) {
-        await finishInterview();
-        return;
-    }
-    // The LLM is prompted to acknowledge the answer then ask the next question,
-    // so ai_text.value is the combined acknowledgement + next question text.
+nextQuestionBtn.addEventListener('click', () => {
+    nextQuestionBtn.classList.remove('next-question-pulse');
     const nextQ = aiText.value || 'Tell me about a challenge you overcame.';
     showQuestionInInterviewScreen(nextQ, null);
 });
 
 // Skip question
 skipQuestionBtn.addEventListener('click', async () => {
-    const session = getSession();
-    session.currentQuestion += 1;
+    const s = getSession();
+    s.currentQuestion += 1;
     updateQuestionBadge();
-    if (session.currentQuestion >= session.totalQuestions) {
+    if (s.sessionMode === 'questions' && s.currentQuestion >= s.questionCount) {
         await finishInterview();
         return;
     }
@@ -374,9 +644,12 @@ endInterviewBtn.addEventListener('click', async () => {
 
 async function finishInterview() {
     timer.stop();
+    stopElapsedTimer();
     updateStatus('processing', 'Generating your performance report…');
     try {
         const evaluation = await endSession();
+        const metrics = computeSpeakingMetrics(_sessionTranscripts);
+        saveSessionToHistory(evaluation, metrics);
         renderResults(evaluation);
         showScreen('screen-results');
     } catch (err) {
@@ -385,6 +658,7 @@ async function finishInterview() {
 }
 
 function clearRecordingArea() {
+    _isIdle = false;
     recorder.clear();
     previewAudio.style.display = 'none';
     previewAudio.src = '';
@@ -398,6 +672,8 @@ function clearRecordingArea() {
     progressFill.style.width = '0%';
     recordBtn.style.display = 'inline-block';
     stopBtn.style.display = 'none';
+    stopBtn.classList.remove('btn-recording-pulse');
+    audioContainer.classList.remove('idle-pulse');
     recordingStatus.textContent = '';
 }
 
@@ -414,24 +690,61 @@ function appendHistory(role, content) {
 recordBtn.addEventListener('click', startRecording);
 stopBtn.addEventListener('click', stopRecording);
 
+// Space bar shortcut: start/stop recording while on the interview screen
+document.addEventListener('keydown', (e) => {
+    if (e.code !== 'Space') return;
+    if (['INPUT', 'TEXTAREA', 'SELECT', 'BUTTON'].includes(document.activeElement.tagName)) return;
+    if (!document.getElementById('screen-interview').classList.contains('screen--active')) return;
+    e.preventDefault();
+    if (recorder.isRecording) stopRecording(); else startRecording();
+});
+
 // ============================================================
 // Results screen logic
 // ============================================================
 
+function animateScore(targetPercent) {
+    const duration = 1000;
+    const start = performance.now();
+    scoreCircle.style.setProperty('--score-percent', 0);
+    function step(now) {
+        const t = Math.min((now - start) / duration, 1);
+        const eased = 1 - Math.pow(1 - t, 3);
+        scoreCircle.style.setProperty('--score-percent', targetPercent * eased);
+        if (t < 1) requestAnimationFrame(step);
+    }
+    requestAnimationFrame(step);
+}
+
 function renderResults(evaluation) {
-    const session = getSession();
+    const s = getSession();
     const score = evaluation.overall_score ?? 0;
     const percent = (score / 10) * 100;
 
-    scoreCircle.style.setProperty('--score-percent', percent);
+    animateScore(percent);
     scoreValue.textContent = score.toFixed(1);
     scoreSummary.textContent = evaluation.summary ?? '';
-    resultsDifficulty.textContent = capitalize(session.difficulty);
+    resultsDifficulty.textContent = capitalize(s.difficulty);
 
     renderList(strengthsList, evaluation.strengths ?? []);
     renderList(weaknessesList, evaluation.weaknesses ?? []);
     renderOrderedList(suggestionsList, evaluation.suggestions ?? []);
 
+    // Speaking metrics (computed client-side from collected transcripts)
+    const metrics = computeSpeakingMetrics(_sessionTranscripts);
+    if (metrics && _sessionTranscripts.length > 0) {
+        speakingMetricsCard.style.display = '';
+        speakingMetricsGrid.innerHTML = `
+            <div class="sm-stat"><span class="sm-stat__value">${metrics.filler_word_count}</span><span class="sm-stat__label">Filler Words</span></div>
+            <div class="sm-stat"><span class="sm-stat__value">${metrics.avg_response_words}</span><span class="sm-stat__label">Avg Words/Answer</span></div>
+            <div class="sm-stat"><span class="sm-stat__value">Q${metrics.longest_answer}</span><span class="sm-stat__label">Longest Answer</span></div>
+            <div class="sm-stat"><span class="sm-stat__value">Q${metrics.shortest_answer}</span><span class="sm-stat__label">Shortest Answer</span></div>
+        `;
+    } else {
+        speakingMetricsCard.style.display = 'none';
+    }
+
+    // Per-question breakdown with dimensions, hints, resume alignment
     const pq = evaluation.per_question ?? [];
     if (pq.length > 0) {
         noBreakdownMsg.style.display = 'none';
@@ -439,14 +752,41 @@ function renderResults(evaluation) {
         pq.forEach((item, i) => {
             const details = document.createElement('details');
             details.className = 'pq-item';
+            details.style.animationDelay = `${i * 80}ms`;
+
+            const dims = item.dimensions ?? {};
+            const dimNames = { technical_accuracy: 'Technical', communication: 'Communication',
+                               completeness: 'Completeness', confidence: 'Confidence' };
+            const dimHtml = Object.entries(dimNames).map(([key, label]) => {
+                const val = dims[key] ?? 0;
+                const pct = (val / 5) * 100;
+                return `<div class="dim-row">
+                    <span class="dim-label">${label}</span>
+                    <div class="dim-bar"><div class="dim-bar__fill" style="width:${pct}%"></div></div>
+                    <span class="dim-val">${val}/5</span>
+                </div>`;
+            }).join('');
+
+            const hints = item.ideal_answer_hints ?? [];
+            const hintsHtml = hints.length
+                ? `<div class="pq-hints"><strong>Ideal answer includes:</strong><ul>${hints.map(h => `<li>${escapeHtml(h)}</li>`).join('')}</ul></div>`
+                : '';
+
+            const alignment = item.resume_alignment;
+            const alignBadge = (alignment && alignment !== 'N/A')
+                ? `<span class="align-badge align-badge--${alignment.toLowerCase()}">${alignment}</span>`
+                : '';
+
             details.innerHTML = `
                 <summary>
                     <span>Q${i + 1}: ${escapeHtml(item.question ?? '')}</span>
                     <span class="pq-item__score">${item.score ?? '—'} / 10</span>
                 </summary>
                 <div class="pq-item__body">
-                    <p><strong>Your answer:</strong> ${escapeHtml(item.answer_summary ?? '')}</p>
+                    <p><strong>Your answer:</strong> ${escapeHtml(item.answer_summary ?? '')} ${alignBadge}</p>
                     <p><strong>Feedback:</strong> ${escapeHtml(item.feedback ?? '')}</p>
+                    <div class="dim-grid">${dimHtml}</div>
+                    ${hintsHtml}
                 </div>
             `;
             perQuestionDiv.appendChild(details);
@@ -467,6 +807,7 @@ function renderOrderedList(ol, items) {
 
 practiceAgainBtn.addEventListener('click', () => {
     resetSession();
+    _sessionTranscripts = [];
     historyList.innerHTML = '';
     timerDisplay.textContent = '00:00';
     timerDisplay.className = 'timer-display';
@@ -475,15 +816,22 @@ practiceAgainBtn.addEventListener('click', () => {
 });
 
 trySameBtn.addEventListener('click', () => {
-    const session = getSession();
-    const prevDifficulty = session.difficulty;
-    const prevDuration = session.durationMinutes;
-    const prevTopic = session.topic;
+    const s = getSession();
+    const prevDifficulty = s.difficulty;
+    const prevDuration = s.durationMinutes;
+    const prevTopic = s.topic;
+    const prevPersona = s.persona;
+    const prevMode = s.sessionMode;
+    const prevQCount = s.questionCount;
 
     resetSession();
+    _sessionTranscripts = [];
     setDifficulty(prevDifficulty);
     setDuration(prevDuration);
     setTopic(prevTopic);
+    setPersona(prevPersona);
+    setSessionMode(prevMode);
+    setQuestionCount(prevQCount);
 
     // Restore UI selections
     difficultyBtns.forEach(b => {
@@ -491,6 +839,12 @@ trySameBtn.addEventListener('click', () => {
     });
     durationBtns.forEach(b => {
         b.classList.toggle('pill-btn--active', parseInt(b.dataset.value, 10) === prevDuration);
+    });
+    personaBtns.forEach(b => {
+        b.classList.toggle('pill-btn--active', b.dataset.value === prevPersona);
+    });
+    modeBtns.forEach(b => {
+        b.classList.toggle('mode-btn--active', b.dataset.mode === prevMode);
     });
     topicSelect.value = prevTopic;
 
@@ -532,13 +886,23 @@ function capitalize(str) {
 
 function formatTopic(topic) {
     const map = {
-        general: 'General',
-        machine_learning: 'Machine Learning',
-        data_engineering: 'Data Engineering',
-        backend_development: 'Backend Development',
+        backend_engineering: 'Backend Eng.',
+        frontend_engineering: 'Frontend Eng.',
+        full_stack: 'Full Stack',
+        mobile: 'Mobile',
+        machine_learning: 'ML / AI',
+        data_engineering: 'Data Eng.',
         system_design: 'System Design',
+        product_management: 'Product Mgmt',
+        devops_cloud: 'DevOps / Cloud',
+        digital_marketing: 'Digital Marketing',
+        seo_content: 'SEO / Content',
+        performance_marketing: 'Perf. Marketing',
+        behavioral: 'Behavioral',
+        general: 'General',
+        backend_development: 'Backend Dev.',
     };
-    return map[topic] ?? topic;
+    return map[topic] ?? topic.replace(/_/g, ' ');
 }
 
 window.addEventListener('resize', () => {

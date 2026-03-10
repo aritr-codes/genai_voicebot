@@ -37,40 +37,56 @@ app/                    # Backend package
   cache.py              # Thread-safe InMemoryCache with TTL + LRU
   audio.py              # Audio validation, numpy↔WAV conversion
   monitoring.py         # PerformanceMetrics dataclass + PerformanceMonitor
-  pipeline.py           # Orchestrates: validate → transcribe → LLM → TTS
-  routes.py             # FastAPI endpoints (/, /health, /process_audio)
+  pipeline.py           # process_audio_pipeline (stateless) + process_turn_pipeline (session-aware)
+  prompts.py            # build_interview_prompt() + build_opening_instruction(); topic/difficulty/persona maps
+  session.py            # InterviewSession dataclass + SessionStore (thread-safe, TTL-based); module singleton session_store
+  routes.py             # FastAPI endpoints
   middleware.py         # RequestIdMiddleware, security headers, log_timing utility
   services/
     transcription.py    # AssemblyAI integration (upload + transcribe)
-    llm.py              # OpenAI integration (SDK + HTTP fallback)
+    llm.py              # OpenAI integration; generate_llm_response() (stateless) + generate_llm_response_with_history()
     tts.py              # ElevenLabs integration (MP3→WAV conversion)
 static/                 # Frontend assets served at /static/
-  css/styles.css
-  js/app.js             # Main orchestrator (imports recorder, visualizer, wav-encoder)
+  js/app.js             # Main orchestrator (imports recorder, visualizer, wav-encoder, session, history)
   js/recorder.js        # AudioRecorder class (MediaRecorder + Web Audio API)
+  js/session.js         # Frontend session state; getHistory() / saveSession() — persisted to localStorage
+  js/history.js         # History screen: Canvas sparkline, stats strip, session cards
   js/visualizer.js      # Canvas frequency bars + waveform rendering
   js/wav-encoder.js     # WebM→WAV conversion via AudioContext
 templates/
   index.html            # HTML markup only (CSS/JS loaded as static assets)
 prompts/
-  interview_system.txt  # LLM system prompt (externalized)
+  interview_system.txt  # Base LLM system prompt (extended dynamically by build_interview_prompt)
+  evaluation_system.txt # System prompt for post-session evaluation (instructs LLM to return JSON)
 tests/                  # pytest test suite
 app.py                  # Thin entry point: create_app() + uvicorn
 ```
 
-### Request Flow
+### Request Flows
 
+**Stateless (simple mode):**
 ```
-Browser (templates/index.html + static/js/*)
-  → POST /process_audio (WAV file upload)
-  → routes.py: asyncio.to_thread(process_audio_pipeline)
-  → pipeline.py:
-      validate_wav_bytes() → AudioError if invalid
-      transcribe_audio_bytes() → AssemblyAI (with fallback config)
-      memory_cache check → generate_llm_response() on miss
-      memory_cache check → generate_tts_audio_bytes() on miss
-  → Return JSON: { transcript, ai_response, audio_base64 }
+POST /process_audio → pipeline.process_audio_pipeline
+    validate → transcribe → LLM cache check → generate_llm_response → TTS cache check → TTS
+    → { transcript, ai_response, audio_base64 }
 ```
+
+**Multi-turn interview session:**
+```
+POST /start_session  → session_store.create() → build_interview_prompt() → generate_llm_response_with_history([], opening)
+                     → TTS → { session_id, question_text, question_audio_base64 }
+
+POST /process_turn   → session_store.get(session_id) → process_turn_pipeline(session, wav_bytes)
+    transcribe → append user msg to session.conversation_history
+    → build_interview_prompt() → generate_llm_response_with_history(history, transcript)
+    → append assistant msg → TTS (cached) → { transcript, ai_response, audio_base64, question_number, session_complete }
+
+POST /end_session    → session_store.close() → build transcript string from conversation_history
+                     → generate_llm_response_with_history(evaluation_system, [], full_transcript)
+                     → parse JSON → { overall_score, summary, strengths, weaknesses, suggestions, per_question }
+```
+
+`session_complete` is `true` when `question_count` mode is active and the user has answered that many questions. Time-based mode (`question_count=None`) relies on the frontend timer.
 
 ### API Endpoints
 
@@ -78,7 +94,10 @@ Browser (templates/index.html + static/js/*)
 |--------|----------|---------|
 | GET | `/` | Serves templates/index.html |
 | GET | `/health` | Health status + performance metrics |
-| POST | `/process_audio` | Main pipeline: audio → transcript → LLM → TTS |
+| POST | `/process_audio` | Stateless pipeline: audio → transcript → LLM → TTS |
+| POST | `/start_session` | Create session, get opening question + audio |
+| POST | `/process_turn` | Submit answer audio, get next question + audio |
+| POST | `/end_session` | Close session, get JSON evaluation |
 
 ### Key Patterns
 
@@ -91,6 +110,9 @@ Browser (templates/index.html + static/js/*)
 - **Security headers**: `X-Content-Type-Options`, `X-Frame-Options`, `Referrer-Policy` added to all responses
 - **Lazy API client init**: OpenAI and AssemblyAI clients created on first use in their respective service modules
 - **Fallback strategies**: Transcription has primary (language detection) + fallback (English-only) configs; LLM uses SDK with HTTP API fallback
+- **Session state**: Backend `SessionStore` holds `InterviewSession` objects (in-memory, 2-hour TTL). Frontend `session.js` mirrors completed sessions to `localStorage` for the history screen.
+- **Dynamic prompt assembly**: `build_interview_prompt()` composes a system prompt from the base text in `prompts/interview_system.txt` plus difficulty/topic/resume/persona sections. The evaluation prompt is a separate file (`prompts/evaluation_system.txt`) — the LLM must return valid JSON.
+- **LLM caching boundary**: `process_audio_pipeline` caches LLM responses (same transcript = same response). `process_turn_pipeline` never caches LLM calls (context changes each turn), but does cache TTS.
 
 ### External APIs (keys in `.env`, template in `.env.example`)
 
@@ -100,4 +122,4 @@ Browser (templates/index.html + static/js/*)
 
 ### Frontend
 
-Vanilla JavaScript ES modules with Web Audio API for recording and Canvas API for waveform visualization. No framework or build step. Assets served as static files from `/static/`.
+Vanilla JavaScript ES modules — no framework or build step. Web Audio API for recording, Canvas API for waveform visualization and the history sparkline. Session history is stored in `localStorage` (key managed in `session.js`) and rendered by `history.js`.

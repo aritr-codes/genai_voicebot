@@ -111,6 +111,10 @@ def process_turn_pipeline(
         difficulty=session.difficulty,
         topic=session.topic,
         resume_text=session.resume_text,
+        parsed_resume=session.parsed_resume,
+        persona=session.persona,
+        job_description=session.job_description,
+        covered_topics=session.covered_topics,
     )
     ai_text = generate_llm_response_with_history(
         system_prompt=system_prompt,
@@ -122,7 +126,12 @@ def process_turn_pipeline(
     # 5. Append assistant response to session history
     session.conversation_history.append({"role": "assistant", "content": ai_text})
 
-    # 6. TTS (cached — same text always gives same audio)
+    # 6. Track covered topic hint (last 8 words of the AI question) to reduce repetition
+    if len(session.covered_topics) < 20:
+        topic_hint = " ".join(ai_text.split()[-8:])
+        session.covered_topics.append(topic_hint)
+
+    # 7. TTS (cached — same text always gives same audio)
     tts_bytes = generate_tts_audio_bytes(ai_text)
 
     return transcript, tts_bytes, ai_text
